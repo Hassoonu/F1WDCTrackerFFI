@@ -1,0 +1,28 @@
+{
+  "name": "f1wdctrackerffi",
+  "version": "0.0.1",
+  "description": "Tracking the World Driver Championship for Formula 1.",
+  "keywords": [
+    "C",
+    "JS",
+    "electronJS"
+  ],
+  "homepage": "https://github.com/Hassoonu/F1WDCTrackerFFI#readme",
+  "bugs": {
+    "url": "https://github.com/Hassoonu/F1WDCTrackerFFI/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hassoonu/F1WDCTrackerFFI.git"
+  },
+  "license": "MIT",
+  "author": "Hasan Al Saeedi",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "test": "test"
+  },
+  "devDependencies": {
+    "electron": "^36.3.2"
+  }
+}

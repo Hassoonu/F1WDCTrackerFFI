@@ -1,58 +1,52 @@
-import tkinter as tk
-import myModule
-import mmap 
+import ctypes # allows me to import a c file 
+import asyncio
 
-# port = 8000
-# host = http://api.jolpi.ca/ergast/f1/current/driverStandings
-DEFAULT_PORT = "8000"
+DEFAULT_PORT = 8000
+host = 'http://api.jolpi.ca/ergast/f1/current/driverStandings'
+# DEFAULT_PORT = "8000"
 DEFAULT_BUFLEN = 512
 EXPECTED_MSG_SIZE = 31000 # 31kB
-sharedMemName = "SharedMemory"
+# sharedMemName = "SharedMemory"
+myMessage = "GET /ergast/f1/current/driverstandings/"
 
+async def getAPIData(host, port, clib):
+    # ----- Declare all foreign functions (FFIs) that will be used -----
+
+    connectToAPI = clib.connectToServer
+    sendRequest =  clib.sendDataToServer
+    recvData =     clib.recvDataFromServer
+    clean =        clib.cleanUp
+    # ------------------------------------------------------------
+    # ----- Declare all argument and return types for FFIs -----
+
+    connectToAPI.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    connectToAPI.restypes = ctypes.c_int
+
+    sendRequest.argtypes = [ctypes.c_int, ctypes.c_char_p]
+    sendRequest.restypes = ctypes.c_int
+
+    recvData.argtypes = []
+    recvData.restypes = ctypes.c_int
+
+    clean.argtypes = []
+    clean.restypes = ctypes.c_int
+    # -----------------------------------------------------------------
+    # Get socket to connect to API
+    connectionSocket = await connectToAPI(ctypes.c_char_p(host), ctypes.c_char_p(port))
+
+    amountSent = await sendRequest(ctypes.int(connectionSocket), ctypes.c_char_p(myMessage))
+
+    return 0
 
 def main():
+    lib = ctypes.CDLL('./myCLibrary.so')
+    # Part 1: Get data from C function, do this asynchronously so that you load electronJS while this is communicating with API
+    data = getAPIData(host, DEFAULT_PORT, lib)
+    # Part 1 Async: Load ElectronJS output.
 
-    # start GUI
-    mainWindow = tk.Tk()
-    rows = 0
-    columns = 1
-    # start C data script and put it in dictionary
-    myModule.getData()
+    # Part 2: If data loaded, give electronJS data, else put down a loading screen/loop in electronJS output
 
-    # create mmap object & access the data
-    mmapObj = mmap(-1, EXPECTED_MSG_SIZE, sharedMemName)
-
-    
-    # map it to the same file location as the C file
-    data = mmapObj.read(EXPECTED_MSG_SIZE)
-
-    # close the obj    
-    mmapObj.close()
-
-    drivers = []
-    points = []
-    
-    for driverData in data["MRData"]["StandingsTable"]["StandingsList"]["DriverStandings"]:
-        points.append(driverData["points"])
-        drivers.append(driverData["Driver"]["familyName"])
-        rows = rows + 1
-
-    # assume the order is sorted in descending order. So points[0] is the leader's points
-    leaderPoints = points[0]
-    for i in points:
-        points[i] = points[i] - leaderPoints
-    
-    # populate GUI with data
-    
-    for i in range(rows):
-        for j in range(columns):
-            e = tk.Entry(mainWindow, width=20, fg='blue', font=('Arial', 16, 'bold'))
-            e.grid(row=i, column=j)
-            e.insert(tk.END, drivers[i])
-            e.insert(tk.END, points[i])
-            
-
-    mainWindow.mainloop()
+    # Part 3: conditional if we're waiting for data, once data arrives, load it to screen
     return 0
 
 if __name__ == "__main__":
