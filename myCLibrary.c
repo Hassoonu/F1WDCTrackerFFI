@@ -14,17 +14,36 @@
 
 #pragma comment(lib, "Ws2_32.lib")
 
-#define DEFAULT_PORT "8000"
-#define HOST = 'http://api.jolpi.ca/ergast/f1/current/driverStandings'
+#define DEFAULT_PORT "443"
+#define HOST 'api.jolpi.ca'
+// #define HOST 'localhost'
 #define DEFAULT_BUFLEN 512
 #define EXPECTED_MSG_SIZE 31000 // 31kB
-#define sharedMemName "/my_shared_mem"
+
+// errors:
+#define CONNECTION_ERROR 1
+#define WSASTARTUP_ERROR 2
+#define GETADDRINFO_ERROR 3
+#define SEND_FAIL 4
+#define SHUTDOWN_ERROR 5
+#define RECV_ERROR 6
+
+
+
+
 
 /*
 To compile:
     gcc -shared -o myCLibary.so myCLibary.c
 */
 
+
+// struct Result {
+//     int succeed;
+//     int errorCode;
+//     SOCKET socket;
+
+// };
 
 
 /*
@@ -35,7 +54,7 @@ This function will use provided host and port from user
 Upon failure the function will return -1.
 */
 
-int connectToServer(const char* host, const char* port){
+SOCKET connectToServer(const char* host, const char* port){
     WSADATA wsaData; // init WSAData obj
 
     int iResult; // init winsock and check for errors
@@ -44,7 +63,8 @@ int connectToServer(const char* host, const char* port){
     iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
     if (iResult != 0) {
         fprintf(stderr, "WSAStartup failed: %d\n", iResult);
-        return -1;
+
+        return ~0;
     }
 
     struct addrinfo hints, *result, *ptr;
@@ -59,19 +79,26 @@ int connectToServer(const char* host, const char* port){
     if(iResult != 0){
         fprintf(stderr, "getaddrinfo failed: %d\n", iResult);
         WSACleanup();
-        return -1;
+        return ~0;
     }
 
-    SOCKET ConnectSocket = INVALID_SOCKET;
+    SOCKET serverSocket = INVALID_SOCKET;
     
     ptr = result;
-    ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
 
     for(ptr = result; ptr != NULL; ptr = ptr->ai_next){ //trying as many addresses as possible
-        iResult = connect( ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
-        if(iResult != INVALID_SOCKET){
+        serverSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+        if(serverSocket == INVALID_SOCKET){
+            continue;
+        }
+
+        iResult = connect( serverSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
+        if(iResult != SOCKET_ERROR){
             break; // found a valid address!
         }
+
+        closesocket(serverSocket);
+        serverSocket = INVALID_SOCKET;
     }
 
     freeaddrinfo(result);
@@ -79,43 +106,43 @@ int connectToServer(const char* host, const char* port){
     if(iResult == INVALID_SOCKET){
         fprintf(stderr, "Unable to connect to server!\n");
         WSACleanup();
-        return -1;
+        return ~0;
     }
 
-    return ConnectSocket;
+    return serverSocket;
 }
 
-/*
-Send Data To Server
+int sendDataToServer(SOCKET serverSocket, char* sendMe){
+    /*************************************************************
+    Send Data To Server
 
-The following function will take in a serverSocket as input
-and a message to send and will send the message to the server.
-Upon success, the number of bytes sent will be returned.
-Upon failure, -1 will be returned.
-*/
-
-int sendDataToServer(int serverSocket, char* sendMe){
-     // Send request -------------------------------------------------------------------------------
+    The following function will take in a serverSocket as input
+    and a message to send and will send the message to the server.
+    Upon success, the number of bytes sent will be returned.
+    Upon failure, -1 will be returned.
+    *************************************************************/
+    // Send request -------------------------------------------------------------------------------
     
-    char recvbuff[DEFAULT_BUFLEN];
-
-    int sendAmount;
+    int sendAmount = 0;;
+    int totalSent = 0;
 
     // Send an initial buffer
     do{
-        sendAmount = send(serverSocket, sendMe, (int) strlen(sendMe), 0);
+        sendAmount = send(serverSocket, sendMe + totalSent, (int) strlen(sendMe) - totalSent, 0);
         if (sendAmount == SOCKET_ERROR) {
             printf("send failed: %d\n", WSAGetLastError());
-            closesocket(serverSocket);
+            // closesocket(serverSocket);
             WSACleanup();
             return -1;
         }
+
+        totalSent += sendAmount;
     }while(sendAmount < strlen(sendMe));
 
     int shutdownResult = shutdown(serverSocket, SD_SEND);
     if(shutdownResult == SOCKET_ERROR){
         fprintf(stderr, "shutdown SEND failed: %d\n", WSAGetLastError());
-        closesocket(serverSocket);
+        // closesocket(serverSocket);
         WSACleanup();
         return -1;
     }
@@ -123,7 +150,7 @@ int sendDataToServer(int serverSocket, char* sendMe){
     return sendAmount;
 }
 
-int recvDataFromServer(int serverSocket){
+char* recvDataFromServer(SOCKET serverSocket){
     // receive data --------------------------------------------------------------------------
     // create shared memory and set it to appropriate length
 
@@ -136,57 +163,80 @@ int recvDataFromServer(int serverSocket){
 
     int amountReceived = 0;
     int TOTALAmountReceived = 0;
+    char* buffer = (char*)malloc(DEFAULT_BUFLEN);
+    int buffLen = DEFAULT_BUFLEN;
 
-    while(true){
-        // RECEIVE DATA ---------------------------------------------
-        amountReceived = recv(serverSocket, recvbuff, recvbuflen, 0);
-        if(amountReceived == 0){
+    while(TRUE){
+        // RECEIVE DATA --------------------------------------------------------
+        // for loop used in case realloc had a transient issue (will pass)
+        if(buffLen < amountReceived){
+            char* newBuff = realloc(buffer, buffLen * 2);
+            if(newBuff != NULL){
+                buffer = newBuff;
+                buffLen *= 2;
+            }
+            else{
+                fprintf(stderr, "Error: Not enough memory. Realloc failed.");
+                free(buffer);
+                WSACleanup();
+                return NULL;
+            }
+        }
+        //-----------------------------------------------------------------------
+        amountReceived = recv(serverSocket, buffer + TOTALAmountReceived, buffLen - TOTALAmountReceived, 0);
+        if(amountReceived == 0 && errno == 0){
             // server finished sending data
+            fprintf(stderr, "Received Everthing!\n");
             break;
         }
-        if(amountReceived < 0 && errno == WSAEWOULDBLOCK){
+        if(amountReceived < 0 && (errno == WSAEWOULDBLOCK || errno == WSAEINTR)){
             // interrupt, try again
+            errno = 0;
             continue;
+        }
+        if(errno == WSAECONNRESET){
+            fprintf(stderr, "Error: Server closed connection abruptly. WSAECONNRESET");
+            free(buffer);
+            WSACleanup();
+            return NULL;
         }
         if(amountReceived < 0){
             // error
             fprintf(stderr, "recv failed: %d\n", WSAGetLastError());
-            closesocket(serverSocket);
-            WSACleanup();
-            return 1;
+            // closesocket(serverSocket);
+            free(buffer);
+            WSACleanup(); // make function to free buffer and run WSACleanup().
+            return NULL;
         }
-        
-        // APPEND DATA TO SHARED MEMORY --------------------------------
-        memcpy((char*)ptr + TOTALAmountReceived, recvbuff, amountReceived);
         TOTALAmountReceived += amountReceived;
     }
 
-    return 0;
+    if (TOTALAmountReceived >= buffLen) {
+        buffer = realloc(buffer, buffLen + 1);
+        // need error checking here
+    }
+    buffer[TOTALAmountReceived] = '\0';
+
+    return buffer;
 }
 
-int cleanUp(){
+void freeBuffer(char* buffer){
+    free(buffer);
+}
+
+int cleanUp(SOCKET serverSocket){
     // DISCONNECT -------------------------------------------------------------
-    shutdownResult = shutdown(ConnectSocket, SD_SEND);
+    int shutdownResult = shutdown(serverSocket, SD_SEND);
     if(shutdownResult == SOCKET_ERROR){
         fprintf(stderr, "shutdown RECV failed: %d\n", WSAGetLastError());
-        closesocket(ConnectSocket);
+        closesocket(serverSocket);
         WSACleanup();
         return 1;
     }
 
     // CLEAN UP ----------------------------------------------------------------
-    closeoscket(ConnectSocket);
+    closesocket(serverSocket);
     WSACleanup();
-
-    if (munmap(ptr, EXPECTED_MSG_SIZE) == -1) {
-        fprintf(stderr, "munmap Shared Memory Failed: %d\n", WSAGetLastError());
-        return 1;
-    }
-
-    if (close(sharedMemFD) == -1) {
-        fprintf(stderr, "close sharedMemory File Descriptor Failed: %d\n", WSAGetLastError());
-        return 1;
-    }
 
     return 0;
 }
@@ -206,3 +256,12 @@ int cleanUp(){
 //     // arguments should be null, server and port are static.
 //     execute();
 // }
+
+char* testData(){
+    // data = [
+    // {"id": 1, "name": "Alice", "score": 92},
+    // {"id": 2, "name": "Bob", "score": 85},
+    // ]
+
+    return NULL;
+}

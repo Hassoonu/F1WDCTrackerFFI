@@ -1,52 +1,121 @@
 import ctypes # allows me to import a c file 
 import asyncio
+import os
+import subprocess
+import json
 
-DEFAULT_PORT = 8000
-host = 'http://api.jolpi.ca/ergast/f1/current/driverStandings'
-# DEFAULT_PORT = "8000"
+DEFAULT_PORT = '443'
+host = 'api.jolpi.ca'
+# host = 'localhost'
 DEFAULT_BUFLEN = 512
 EXPECTED_MSG_SIZE = 31000 # 31kB
 # sharedMemName = "SharedMemory"
-myMessage = "GET /ergast/f1/current/driverstandings/"
+myMessage = "GET /ergast/f1/current/driverStandings HTTP/1.1\r\nHost: api.jolpi.ca\r\nConnection: close\r\n\r\n"
 
-async def getAPIData(host, port, clib):
+#test server command: nc -l -p 1234 -e /bin/cat -k
+
+# class Result(ctypes.Structure):
+#     _fields_ = [
+#         ("succeed"),
+#         ("errorCode"),
+#         ("")
+#     ]
+
+
+class APIError(Exception):
+    """Base class for API-related errors."""
+    pass
+
+class ConnectionError(APIError):
+    pass
+
+class TimeoutError(APIError):
+    pass
+
+class InvalidDataError(APIError):
+    pass
+
+class GeneralError(APIError):
+    pass
+
+
+def check_error(code):
+    if code == 0:
+        return
+    elif code == 1:
+        raise ConnectionError()
+    elif code == 2:
+        raise GeneralError()
+    
+
+def getAPIData(host, port, clib):
     # ----- Declare all foreign functions (FFIs) that will be used -----
 
     connectToAPI = clib.connectToServer
     sendRequest =  clib.sendDataToServer
     recvData =     clib.recvDataFromServer
     clean =        clib.cleanUp
+    
     # ------------------------------------------------------------
     # ----- Declare all argument and return types for FFIs -----
 
     connectToAPI.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-    connectToAPI.restypes = ctypes.c_int
+    connectToAPI.restype = ctypes.c_size_t
 
-    sendRequest.argtypes = [ctypes.c_int, ctypes.c_char_p]
-    sendRequest.restypes = ctypes.c_int
+    sendRequest.argtypes = [ctypes.c_size_t, ctypes.c_char_p]
+    sendRequest.restype = ctypes.c_int
 
-    recvData.argtypes = []
-    recvData.restypes = ctypes.c_int
+    recvData.argtypes = [ctypes.c_size_t]
+    recvData.restype = ctypes.c_char_p
 
-    clean.argtypes = []
-    clean.restypes = ctypes.c_int
+    clean.argtypes = [ctypes.c_size_t]
+    clean.restype = ctypes.c_int
+
     # -----------------------------------------------------------------
-    # Get socket to connect to API
-    connectionSocket = await connectToAPI(ctypes.c_char_p(host), ctypes.c_char_p(port))
+    # Get socket to connect to API:
+    connectionSocket = connectToAPI( host.encode('utf-8') , port.encode('utf-8') )
+    if(connectionSocket == ~0):
+        check_error(1)
+    amountSent = sendRequest(connectionSocket, myMessage.encode('utf-8') )
+    if(amountSent <= 0):
+        check_error(2)
+        clean(connectionSocket)
+        return None
+    # -----------------------------------------------------------------
+    # Receive Data:
+    dataString = recvData(connectionSocket)
+    if(dataString == None):
+        check_error(2)
+        clean(connectionSocket)
+        return None
+    print("recv'd: ", dataString)
+    convertedData = json.loads(dataString.decode('utf-8'))
 
-    amountSent = await sendRequest(ctypes.int(connectionSocket), ctypes.c_char_p(myMessage))
-
-    return 0
+    cleanStatus = clean(connectionSocket)
+    if(cleanStatus != 0):
+        check_error(3)
+        return None
+    
+    return convertedData
 
 def main():
-    lib = ctypes.CDLL('./myCLibrary.so')
+    lib = ctypes.CDLL('./myCLibrary.dll')
     # Part 1: Get data from C function, do this asynchronously so that you load electronJS while this is communicating with API
     data = getAPIData(host, DEFAULT_PORT, lib)
     # Part 1 Async: Load ElectronJS output.
-
+    # electronPath = "C:/Users/jolpi/Documents/Projects/F1WDCTrackerFFI"
+    # main_js_path = os.path.join(electronPath, "main.js")
+    # subprocess.run(["npx", "electron", main_js_path], cwd=electronPath)
     # Part 2: If data loaded, give electronJS data, else put down a loading screen/loop in electronJS output
 
     # Part 3: conditional if we're waiting for data, once data arrives, load it to screen
+
+
+    freeBuffer =   lib.freeBuffer
+    freeBuffer.argtypes = [ctypes.c_char_p]
+
+    freeBuffer(data)
+
     return 0
 
 if __name__ == "__main__":
