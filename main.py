@@ -10,7 +10,7 @@ host = 'api.jolpi.ca'
 DEFAULT_BUFLEN = 512
 EXPECTED_MSG_SIZE = 31000 # 31kB
 # sharedMemName = "SharedMemory"
-myMessage = "GET /ergast/f1/current/driverStandings HTTP/1.1\r\nHost: api.jolpi.ca\r\nConnection: close\r\n\r\n"
+myMessage = "GET /ergast/f1/current/driverStandings HTTPS/1.1\r\nHost: api.jolpi.ca\r\nConnection: close\r\n\r\n"
 
 #test server command: nc -l -p 1234 -e /bin/cat -k
 
@@ -21,6 +21,11 @@ myMessage = "GET /ergast/f1/current/driverStandings HTTP/1.1\r\nHost: api.jolpi.
 #         ("")
 #     ]
 
+class SSLConnection(ctypes.Structure):
+    _fields_ = [
+        ("ssl", ctypes.c_void_p),
+        ("ctx", ctypes.c_void_p)
+    ]
 
 class APIError(Exception):
     """Base class for API-related errors."""
@@ -35,6 +40,15 @@ class TimeoutError(APIError):
 class InvalidDataError(APIError):
     pass
 
+class SendError(APIError):
+    pass
+
+class RecvError(APIError):
+    pass
+
+class CleanupError():
+    pass
+
 class GeneralError(APIError):
     pass
 
@@ -45,13 +59,25 @@ def check_error(code):
     elif code == 1:
         raise ConnectionError()
     elif code == 2:
+        raise TimeoutError()
+    elif code == 3:
+        raise InvalidDataError()
+    elif code == 4:
+        raise SendError()
+    elif code == 5:
+        raise RecvError()    
+    elif code == 6:
+        raise CleanupError()
+    elif code == 2:
         raise GeneralError()
     
 
 def getAPIData(host, port, clib):
     # ----- Declare all foreign functions (FFIs) that will be used -----
 
+    initSSL =      clib.init_openssl
     connectToAPI = clib.connectToServer
+    contextWrap =  clib.ssl_context_wrap
     sendRequest =  clib.sendDataToServer
     recvData =     clib.recvDataFromServer
     clean =        clib.cleanUp
@@ -59,47 +85,74 @@ def getAPIData(host, port, clib):
     # ------------------------------------------------------------
     # ----- Declare all argument and return types for FFIs -----
 
+    initSSL.argtypes = None
+    initSSL.restype = None
+
     connectToAPI.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     connectToAPI.restype = ctypes.c_size_t
 
-    sendRequest.argtypes = [ctypes.c_size_t, ctypes.c_char_p]
+    contextWrap.argtypes = [ctypes.c_size_t]
+    contextWrap.restype = SSLConnection
+
+    sendRequest.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p]
     sendRequest.restype = ctypes.c_int
 
-    recvData.argtypes = [ctypes.c_size_t]
+    recvData.argtypes = [ctypes.c_void_p]
     recvData.restype = ctypes.c_char_p
 
-    clean.argtypes = [ctypes.c_size_t]
+    clean.argtypes = [SSLConnection, ctypes.c_size_t]
     clean.restype = ctypes.c_int
 
     # -----------------------------------------------------------------
+    initSSL() # init all needed libraries for secure socket connection
+    # -----------------------------------------------------------------
+
     # Get socket to connect to API:
     connectionSocket = connectToAPI( host.encode('utf-8') , port.encode('utf-8') )
     if(connectionSocket == ~0):
         check_error(1)
-    amountSent = sendRequest(connectionSocket, myMessage.encode('utf-8') )
-    if(amountSent <= 0):
-        check_error(2)
-        clean(connectionSocket)
-        return None
     # -----------------------------------------------------------------
-    # Receive Data:
-    dataString = recvData(connectionSocket)
-    if(dataString == None):
-        check_error(2)
+
+    # Wrap connected socket with TCP and a context wrap:
+    connection = contextWrap(connectionSocket)
+
+    # -----------------------------------------------------------------
+
+    # Send data to server:
+    amountSent = sendRequest(connection.ssl, connectionSocket, myMessage.encode('utf-8') )
+    if(amountSent <= 0):
+        check_error(4)
         clean(connectionSocket)
         return None
+
+    # -----------------------------------------------------------------
+
+    # Receive Data:
+    dataString = recvData(connection.ssl)
+    if(dataString == None):
+        check_error(5)
+        clean(connectionSocket)
+        return None
+
+    # -----------------------------------------------------------------
+    
+    # Convert data from JSON to Python tables
     print("recv'd: ", dataString)
     convertedData = json.loads(dataString.decode('utf-8'))
 
-    cleanStatus = clean(connectionSocket)
+    # -----------------------------------------------------------------
+
+    # Clean up sockets and close connections.
+    cleanStatus = clean(connection, connectionSocket)
     if(cleanStatus != 0):
-        check_error(3)
+        check_error(6)
         return None
     
     return convertedData
 
 def main():
     lib = ctypes.CDLL('./myCLibrary.dll')
+    # print("Opened Library\n")
     # Part 1: Get data from C function, do this asynchronously so that you load electronJS while this is communicating with API
     data = getAPIData(host, DEFAULT_PORT, lib)
     # Part 1 Async: Load ElectronJS output.
@@ -120,3 +173,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+'''
+To do list:
+
+
+'''

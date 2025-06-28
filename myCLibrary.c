@@ -8,9 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h> // file control operations
-
 #include <winsock2.h> // for windows, not linux
 #include <ws2tcpip.h>
+
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -28,10 +30,6 @@
 #define SHUTDOWN_ERROR 5
 #define RECV_ERROR 6
 
-
-
-
-
 /*
 To compile:
     gcc -shared -o myCLibary.so myCLibary.c
@@ -46,13 +44,28 @@ To compile:
 // };
 
 
-/*
-Connect To Server
-This function will use provided host and port from user
-    to return a socket connected to the destination host   
-    using the port provided by the user.
-Upon failure the function will return -1.
-*/
+struct SSLConnection {
+    SSL* ssl;
+    SSL_CTX* ctx;
+};
+
+// /*
+// Connect To Server
+// This function will use provided host and port from user
+//     to return a socket connected to the destination host   
+//     using the port provided by the user.
+// Upon failure the function will return -1.
+// */
+
+void init_openssl(){
+    SSL_library_init();           // loads encryption algs
+    SSL_load_error_strings();     // loads error strings
+    OpenSSL_add_all_algorithms(); // "Add all ciphers and digests"
+}
+
+void cleanup_openssl() {
+    EVP_cleanup();
+}
 
 SOCKET connectToServer(const char* host, const char* port){
     WSADATA wsaData; // init WSAData obj
@@ -63,7 +76,6 @@ SOCKET connectToServer(const char* host, const char* port){
     iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
     if (iResult != 0) {
         fprintf(stderr, "WSAStartup failed: %d\n", iResult);
-
         return ~0;
     }
 
@@ -86,7 +98,7 @@ SOCKET connectToServer(const char* host, const char* port){
     
     ptr = result;
 
-    for(ptr = result; ptr != NULL; ptr = ptr->ai_next){ //trying as many addresses as possible
+    for(; ptr != NULL; ptr = ptr->ai_next){ //trying as many addresses as possible
         serverSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
         if(serverSocket == INVALID_SOCKET){
             continue;
@@ -112,7 +124,24 @@ SOCKET connectToServer(const char* host, const char* port){
     return serverSocket;
 }
 
-int sendDataToServer(SOCKET serverSocket, char* sendMe){
+struct SSLConnection ssl_context_wrap(SOCKET mySocket){
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    SSL* ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, mySocket);
+
+    if (SSL_connect(ssl) <= 0) { // TCP handshake
+        ERR_print_errors_fp(stderr); // Print any handshake errors
+        exit(1);
+    }
+
+    struct SSLConnection myConn;
+    myConn.ssl = ssl;
+    myConn.ctx = ctx;
+
+    return myConn;
+}
+
+int sendDataToServer(void* ssl, SOCKET serverSocket, char* sendMe){
     /*************************************************************
     Send Data To Server
 
@@ -126,9 +155,10 @@ int sendDataToServer(SOCKET serverSocket, char* sendMe){
     int sendAmount = 0;;
     int totalSent = 0;
 
+    SSL* mySSL = (SSL*)ssl;
     // Send an initial buffer
     do{
-        sendAmount = send(serverSocket, sendMe + totalSent, (int) strlen(sendMe) - totalSent, 0);
+        sendAmount = SSL_write(mySSL, sendMe + totalSent, (int) strlen(sendMe) - totalSent);
         if (sendAmount == SOCKET_ERROR) {
             printf("send failed: %d\n", WSAGetLastError());
             // closesocket(serverSocket);
@@ -150,7 +180,7 @@ int sendDataToServer(SOCKET serverSocket, char* sendMe){
     return sendAmount;
 }
 
-char* recvDataFromServer(SOCKET serverSocket){
+char* recvDataFromServer(void* ssl){
     // receive data --------------------------------------------------------------------------
     // create shared memory and set it to appropriate length
 
@@ -165,11 +195,12 @@ char* recvDataFromServer(SOCKET serverSocket){
     int TOTALAmountReceived = 0;
     char* buffer = (char*)malloc(DEFAULT_BUFLEN);
     int buffLen = DEFAULT_BUFLEN;
+    SSL* mySSL = (SSL*)ssl;
 
-    while(TRUE){
+    while(1){
         // RECEIVE DATA --------------------------------------------------------
         // for loop used in case realloc had a transient issue (will pass)
-        if(buffLen < amountReceived){
+        if(TOTALAmountReceived + DEFAULT_BUFLEN > buffLen){
             char* newBuff = realloc(buffer, buffLen * 2);
             if(newBuff != NULL){
                 buffer = newBuff;
@@ -183,18 +214,18 @@ char* recvDataFromServer(SOCKET serverSocket){
             }
         }
         //-----------------------------------------------------------------------
-        amountReceived = recv(serverSocket, buffer + TOTALAmountReceived, buffLen - TOTALAmountReceived, 0);
-        if(amountReceived == 0 && errno == 0){
+        amountReceived = SSL_read(mySSL, buffer + TOTALAmountReceived, buffLen - TOTALAmountReceived);
+        int err =  SSL_get_error(mySSL, amountReceived);
+        if(amountReceived == 0 && err == 0){
             // server finished sending data
             fprintf(stderr, "Received Everthing!\n");
             break;
         }
-        if(amountReceived < 0 && (errno == WSAEWOULDBLOCK || errno == WSAEINTR)){
+        if(amountReceived == SOCKET_ERROR && (err == WSAEWOULDBLOCK || err == WSAEINTR)){
             // interrupt, try again
-            errno = 0;
             continue;
         }
-        if(errno == WSAECONNRESET){
+        if(err == WSAECONNRESET){
             fprintf(stderr, "Error: Server closed connection abruptly. WSAECONNRESET");
             free(buffer);
             WSACleanup();
@@ -212,8 +243,14 @@ char* recvDataFromServer(SOCKET serverSocket){
     }
 
     if (TOTALAmountReceived >= buffLen) {
-        buffer = realloc(buffer, buffLen + 1);
-        // need error checking here
+        char* newBuff = realloc(buffer, buffLen + 1);
+        if (!newBuff) {
+            fprintf(stderr, "Error: Final realloc failed.\n");
+            free(buffer);
+            WSACleanup();
+            return NULL;
+        }
+        buffer = newBuff;
     }
     buffer[TOTALAmountReceived] = '\0';
 
@@ -224,9 +261,9 @@ void freeBuffer(char* buffer){
     free(buffer);
 }
 
-int cleanUp(SOCKET serverSocket){
+int cleanUp(struct SSLConnection myConn, SOCKET serverSocket){
     // DISCONNECT -------------------------------------------------------------
-    int shutdownResult = shutdown(serverSocket, SD_SEND);
+    int shutdownResult = shutdown(serverSocket, SD_RECEIVE);
     if(shutdownResult == SOCKET_ERROR){
         fprintf(stderr, "shutdown RECV failed: %d\n", WSAGetLastError());
         closesocket(serverSocket);
@@ -235,27 +272,17 @@ int cleanUp(SOCKET serverSocket){
     }
 
     // CLEAN UP ----------------------------------------------------------------
-    closesocket(serverSocket);
+    closesocket(serverSocket); // Close the TCP socket
     WSACleanup();
+
+    SSL_shutdown(myConn.ssl);     // Gracefully close TLS session
+    SSL_free(myConn.ssl);         // Free the SSL object
+    SSL_CTX_free(myConn.ctx);     // Free the SSL context
+    cleanup_openssl();     // Cleanup OpenSSL state
+
 
     return 0;
 }
-
-// int execute(){
-
-//     connectToServer();
-
-//     sendDataToServer();
-
-//     recvDataFromServer();
-
-//     cleanUp();
-// }
-
-// static PyObject * myModule_getData(PyObject *self, PyObject *args){
-//     // arguments should be null, server and port are static.
-//     execute();
-// }
 
 char* testData(){
     // data = [
