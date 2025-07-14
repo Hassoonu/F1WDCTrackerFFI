@@ -16,9 +16,6 @@
 
 #pragma comment(lib, "Ws2_32.lib")
 
-#define DEFAULT_PORT "443"
-#define HOST 'api.jolpi.ca'
-// #define HOST 'localhost'
 #define DEFAULT_BUFLEN 512
 #define EXPECTED_MSG_SIZE 31000 // 31kB
 
@@ -120,7 +117,7 @@ SOCKET connectToServer(const char* host, const char* port){
         WSACleanup();
         return ~0;
     }
-
+    fprintf(stderr, "Server socket made.\n");
     return serverSocket;
 }
 
@@ -157,8 +154,10 @@ int sendDataToServer(void* ssl, SOCKET serverSocket, char* sendMe){
 
     SSL* mySSL = (SSL*)ssl;
     // Send an initial buffer
+    fprintf(stderr, "The message: %.*s", strlen(sendMe), sendMe);
     do{
         sendAmount = SSL_write(mySSL, sendMe + totalSent, (int) strlen(sendMe) - totalSent);
+        fprintf(stderr, "Just sent: %d bytes", sendAmount);
         if (sendAmount == SOCKET_ERROR) {
             printf("send failed: %d\n", WSAGetLastError());
             // closesocket(serverSocket);
@@ -168,7 +167,7 @@ int sendDataToServer(void* ssl, SOCKET serverSocket, char* sendMe){
 
         totalSent += sendAmount;
     }while(sendAmount < strlen(sendMe));
-
+    
     int shutdownResult = shutdown(serverSocket, SD_SEND);
     if(shutdownResult == SOCKET_ERROR){
         fprintf(stderr, "shutdown SEND failed: %d\n", WSAGetLastError());
@@ -176,7 +175,7 @@ int sendDataToServer(void* ssl, SOCKET serverSocket, char* sendMe){
         WSACleanup();
         return -1;
     }
-
+    fprintf(stderr, "Finished send. Total sent bytes: %d\n", totalSent);
     return sendAmount;
 }
 
@@ -200,6 +199,7 @@ char* recvDataFromServer(void* ssl){
     while(1){
         // RECEIVE DATA --------------------------------------------------------
         // for loop used in case realloc had a transient issue (will pass)
+        fprintf(stderr, "Getting data....\n");
         if(TOTALAmountReceived + DEFAULT_BUFLEN > buffLen){
             char* newBuff = realloc(buffer, buffLen * 2);
             if(newBuff != NULL){
@@ -215,8 +215,11 @@ char* recvDataFromServer(void* ssl){
         }
         //-----------------------------------------------------------------------
         amountReceived = SSL_read(mySSL, buffer + TOTALAmountReceived, buffLen - TOTALAmountReceived);
+        fprintf(stderr, "Received: %d\n", amountReceived);
         int err =  SSL_get_error(mySSL, amountReceived);
-        if(amountReceived == 0 && err == 0){
+        fprintf(stderr, "Err: %d\n", err);
+        fprintf(stderr, "%.*s\n", amountReceived, buffer);
+        if(amountReceived == 0 && err >= 0){
             // server finished sending data
             fprintf(stderr, "Received Everthing!\n");
             break;
@@ -240,18 +243,21 @@ char* recvDataFromServer(void* ssl){
             return NULL;
         }
         TOTALAmountReceived += amountReceived;
-    }
 
-    if (TOTALAmountReceived >= buffLen) {
-        char* newBuff = realloc(buffer, buffLen + 1);
-        if (!newBuff) {
-            fprintf(stderr, "Error: Final realloc failed.\n");
-            free(buffer);
-            WSACleanup();
-            return NULL;
+        if (TOTALAmountReceived >= buffLen) {
+            fprintf(stderr, "Reallocating Buffer...\n");
+            char* newBuff = realloc(buffer, buffLen + 1);
+            if (!newBuff) {
+                fprintf(stderr, "Error: Final realloc failed.\n");
+                free(buffer);
+                WSACleanup();
+                return NULL;
         }
         buffer = newBuff;
     }
+    
+    }
+
     buffer[TOTALAmountReceived] = '\0';
 
     return buffer;

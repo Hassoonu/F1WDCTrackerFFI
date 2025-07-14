@@ -5,12 +5,16 @@ import subprocess
 import json
 
 DEFAULT_PORT = '443'
-host = 'api.jolpi.ca'
-# host = 'localhost'
+# host = 'api.jolpi.ca'
+host = 'localhost'
 DEFAULT_BUFLEN = 512
 EXPECTED_MSG_SIZE = 31000 # 31kB
 # sharedMemName = "SharedMemory"
-myMessage = "GET /ergast/f1/current/driverStandings HTTPS/1.1\r\nHost: api.jolpi.ca\r\nConnection: close\r\n\r\n"
+myMessage = "GET /ergast/f1/2025/driverstandings/?format=api HTTP/1.1\r\n" \
+            "Host: api.jolpi.ca\r\n" \
+            "User-Agent: my-openssl-client/1.0\r\n" \
+            "Connection: keep-alive\r\n" \
+            "\r\n"
 
 #test server command: nc -l -p 1234 -e /bin/cat -k
 
@@ -115,7 +119,6 @@ def getAPIData(host, port, clib):
 
     # Wrap connected socket with TCP and a context wrap:
     connection = contextWrap(connectionSocket)
-
     # -----------------------------------------------------------------
 
     # Send data to server:
@@ -138,7 +141,12 @@ def getAPIData(host, port, clib):
     
     # Convert data from JSON to Python tables
     print("recv'd: ", dataString)
-    convertedData = json.loads(dataString.decode('utf-8'))
+    try:
+        convertedData = json.loads(dataString.decode('utf-8'))
+    except Exception as e:
+        clean(connection, connectionSocket)
+        return dataString
+
 
     # -----------------------------------------------------------------
 
@@ -177,6 +185,11 @@ if __name__ == "__main__":
 
 '''
 To do list:
+have index.html pull list data from python received data
+    figure out how ton give the electron window the python data
 
+list the errors here bro
+
+make a simple UI, dont need to spend time making it pretty for now, just get soemthing working.
 
 '''
