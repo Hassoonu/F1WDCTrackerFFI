@@ -259,7 +259,7 @@ char* recvDataFromServer(void* ssl){
     }
 
     buffer[TOTALAmountReceived] = '\0';
-
+    fprintf(stderr, "Finished Receiving data, total amount received: %d\n", TOTALAmountReceived);
     return buffer;
 }
 

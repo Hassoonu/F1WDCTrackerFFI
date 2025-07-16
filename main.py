@@ -3,19 +3,24 @@ import asyncio
 import os
 import subprocess
 import json
+from memory_profiler import profile
+from flask import Flask, jsonify
 
 DEFAULT_PORT = '443'
-# host = 'api.jolpi.ca'
-host = 'localhost'
+host = 'api.jolpi.ca'
+# host = 'localhost'
 DEFAULT_BUFLEN = 512
 EXPECTED_MSG_SIZE = 31000 # 31kB
 # sharedMemName = "SharedMemory"
-myMessage = "GET /ergast/f1/2025/driverstandings/?format=api HTTP/1.1\r\n" \
+myMessage = "GET /ergast/f1/current/driverstandings/?format=json HTTP/1.1\r\n" \
             "Host: api.jolpi.ca\r\n" \
             "User-Agent: my-openssl-client/1.0\r\n" \
-            "Connection: keep-alive\r\n" \
+            "Connection: close\r\n" \
             "\r\n"
 
+app = Flask(__name__)
+
+data = []
 #test server command: nc -l -p 1234 -e /bin/cat -k
 
 # class Result(ctypes.Structure):
@@ -77,6 +82,7 @@ def check_error(code):
     
 
 def getAPIData(host, port, clib):
+    global data
     # ----- Declare all foreign functions (FFIs) that will be used -----
 
     initSSL =      clib.init_openssl
@@ -85,7 +91,7 @@ def getAPIData(host, port, clib):
     sendRequest =  clib.sendDataToServer
     recvData =     clib.recvDataFromServer
     clean =        clib.cleanUp
-    
+    freeBuffer =   clib.freeBuffer
     # ------------------------------------------------------------
     # ----- Declare all argument and return types for FFIs -----
 
@@ -107,6 +113,9 @@ def getAPIData(host, port, clib):
     clean.argtypes = [SSLConnection, ctypes.c_size_t]
     clean.restype = ctypes.c_int
 
+    
+    freeBuffer.argtypes = [ctypes.c_char_p]
+
     # -----------------------------------------------------------------
     initSSL() # init all needed libraries for secure socket connection
     # -----------------------------------------------------------------
@@ -126,7 +135,6 @@ def getAPIData(host, port, clib):
     if(amountSent <= 0):
         check_error(4)
         clean(connectionSocket)
-        return None
 
     # -----------------------------------------------------------------
 
@@ -135,61 +143,70 @@ def getAPIData(host, port, clib):
     if(dataString == None):
         check_error(5)
         clean(connectionSocket)
-        return None
 
     # -----------------------------------------------------------------
     
     # Convert data from JSON to Python tables
-    print("recv'd: ", dataString)
+    # print("recv'd: ", dataString)
     try:
         convertedData = json.loads(dataString.decode('utf-8'))
     except Exception as e:
         clean(connection, connectionSocket)
-        return dataString
-
+        freeBuffer(dataString)
 
     # -----------------------------------------------------------------
 
     # Clean up sockets and close connections.
     cleanStatus = clean(connection, connectionSocket)
     if(cleanStatus != 0):
+        freeBuffer(dataString)
+        # print("error in clean func", flush=True)
         check_error(6)
-        return None
     
-    return convertedData
+    # print("CONVERTED STRING IS:", convertedData['MRData']['StandingsTable']['StandingsLists'][0]["DriverStandings"])
+    # freeBuffer(dataString)
+    data = convertedData
 
+def parse_data(data):
+    standings_list = data['MRData']['StandingsTable']['StandingsLists'][0]["DriverStandings"]
+    driverId = []
+    points = []
+    # print(standings_list, flush=True)
+    for i in range(len(standings_list)):
+        points.append(standings_list[i]['points'])
+        driverId.append(standings_list[i]['Driver']['driverId'])
+    # print("---------------------------------------------------------", flush=True)
+    # print(driverId)
+    # print(points)
+    # print(data['MRData']['StandingsTable'])
+    return driverId, points
+
+@app.route("/data")
+def send_data():
+    drivers, points = parse_data(data)
+    print("Parsed the data\n", flush=True)
+
+    driverData = {
+        "drivers": drivers,
+        "points": points
+    }
+    return jsonify(driverData)
+
+# @profile
+@app.route("/")
 def main():
     lib = ctypes.CDLL('./myCLibrary.dll')
-    # print("Opened Library\n")
-    # Part 1: Get data from C function, do this asynchronously so that you load electronJS while this is communicating with API
-    data = getAPIData(host, DEFAULT_PORT, lib)
-    # Part 1 Async: Load ElectronJS output.
-    # electronPath = "C:/Users/jolpi/Documents/Projects/F1WDCTrackerFFI"
-    # main_js_path = os.path.join(electronPath, "main.js")
-    # subprocess.run(["npx", "electron", main_js_path], cwd=electronPath)
-    # Part 2: If data loaded, give electronJS data, else put down a loading screen/loop in electronJS output
+    print("Opened Library\n", flush=True)
 
-    # Part 3: conditional if we're waiting for data, once data arrives, load it to screen
+    # Part 1: Get data from C function
+    getAPIData(host, DEFAULT_PORT, lib)
+    print("WE GOT THE DATA!!!\n\n\n\n", flush=True)
+    # print("DATA IS:", data)
 
+    
+    print("Created deliverable\n", flush=True)
 
-    freeBuffer =   lib.freeBuffer
-    freeBuffer.argtypes = [ctypes.c_char_p]
+    app.run(port=5000)
 
-    freeBuffer(data)
-
-    return 0
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-
-
-'''
-To do list:
-have index.html pull list data from python received data
-    figure out how ton give the electron window the python data
-
-list the errors here bro
-
-make a simple UI, dont need to spend time making it pretty for now, just get soemthing working.
-
-'''

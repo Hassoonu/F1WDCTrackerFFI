@@ -4,17 +4,18 @@
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'"
+      content="default-src 'self'; connect-src 'self' http://localhost:5000; script-src 'self';"
     />
+    <link rel="stylesheet" href="styles.css">
     <title>F1 WDC Tracker</title>
     <body>
-        <ol id="orderedWDCList">
-            <li>Max Verstappen</li>
-            <li>Lewis Hamilton</li>
-            <li>Charles LeClerc</li>
-            <li>Fernando Alonso</li>
-            <li>Me</li>
-        </ol>
+        <span>
+            <ul id="drivers_list">Drivers
+            </ul>
+
+            <ul id="points_list"> Points
+            </ul>
+<span>
     </body>
     <script src="./renderer.js"></script>
 </html>
