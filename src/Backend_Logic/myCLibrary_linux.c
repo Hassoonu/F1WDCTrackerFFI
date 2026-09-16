@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <errno.h>
 #include <signal.h> // why this?
 #include <string.h> // why this?
@@ -157,8 +158,8 @@ int sendDataToServer(void* ssl, int serverSocket, char* sendMe){
     do{
         sendAmount = SSL_write(mySSL, sendMe + totalSent, (int) strlen(sendMe) - totalSent);
         fprintf(stderr, "Just sent: %d bytes", sendAmount);
-        if (sendAmount == SOCKET_ERROR) {
-            printf("send failed: %d\n", WSAGetLastError());
+        if (sendAmount == -1) {
+            perror("send error");
             close(serverSocket);
             return -1;
         }
@@ -166,9 +167,9 @@ int sendDataToServer(void* ssl, int serverSocket, char* sendMe){
         totalSent += sendAmount;
     }while(sendAmount < strlen(sendMe));
     
-    int shutdownResult = shutdown(serverSocket, SD_SEND);
-    if(shutdownResult == SOCKET_ERROR){
-        fprintf(stderr, "shutdown SEND failed: %d\n", WSAGetLastError());
+    int shutdownResult = shutdown(serverSocket, SHUT_WR); // can no longer write to server, flushes buffer.
+    if(shutdownResult == -1){
+        perror("shutdown failed after trying to close write-side pipe.");
         close(serverSocket);
         return -1;
     }
@@ -199,6 +200,7 @@ char* recvDataFromServer(void* ssl){
         fprintf(stderr, "Getting data....\n");
         if(TOTALAmountReceived + DEFAULT_BUFLEN > buffLen){
             char* newBuff = realloc(buffer, buffLen * 2);
+            // check this code again, chance that you get too much data, realloc, and realloc to a different location and miss data
             if(newBuff != NULL){
                 buffer = newBuff;
                 buffLen *= 2;
@@ -220,22 +222,22 @@ char* recvDataFromServer(void* ssl){
             fprintf(stderr, "Received Everthing!\n");
             break;
         }
-        if(amountReceived == SOCKET_ERROR && (err == WSAEWOULDBLOCK || err == WSAEINTR)){
+        if(amountReceived == -1 && (err == EAGAIN || err == EWOULDBLOCK)){
             // interrupt, try again
+            // only works if socket is non-blocking
             continue;
         }
-        if(err == WSAECONNRESET){
+        if(err == EPIPE){
+            // need to also handle SIGPIPE signal
             fprintf(stderr, "Error: Server closed connection abruptly. WSAECONNRESET");
             free(buffer);
-            WSACleanup();
             return NULL;
         }
         if(amountReceived < 0){
             // error
-            fprintf(stderr, "recv failed: %d\n", WSAGetLastError());
+            perror("recv failed");
             // closesocket(serverSocket);
             free(buffer);
-            WSACleanup(); // make function to free buffer and run WSACleanup().
             return NULL;
         }
         TOTALAmountReceived += amountReceived;
@@ -246,7 +248,6 @@ char* recvDataFromServer(void* ssl){
             if (!newBuff) {
                 fprintf(stderr, "Error: Final realloc failed.\n");
                 free(buffer);
-                WSACleanup();
                 return NULL;
         }
         buffer = newBuff;
@@ -265,9 +266,9 @@ void freeBuffer(char* buffer){
 
 int cleanUp(struct SSLConnection myConn, int serverSocket){
     // DISCONNECT -------------------------------------------------------------
-    int shutdownResult = shutdown(serverSocket, SD_RECEIVE);
-    if(shutdownResult == SOCKET_ERROR){
-        fprintf(stderr, "shutdown RECV failed: %d\n", WSAGetLastError());
+    int shutdownResult = shutdown(serverSocket, SHUT_RD);
+    if(shutdownResult == -1){
+        perror("shutdown SHUT_RD failed");
         close(serverSocket);
         return 1;
     }
