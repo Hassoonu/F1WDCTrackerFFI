@@ -3,29 +3,33 @@
 
 
 #include <stdio.h>
-#include <errno.h>
-#include <signal.h>
 #include <stdlib.h>
-#include <string.h>
+#include <errno.h>
+#include <signal.h> // why this?
+#include <string.h> // why this?
+
 #include <fcntl.h> // file control operations
-#include <winsock2.h> // for windows, not linux
-#include <ws2tcpip.h>
+#include <sys/socket.h> // socket library 
+#include <netdb.h> // definitions for network-based operations. gai_strerror, NI_NUMERICHOST, etc
+
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/crypto.h>
 
-#pragma comment(lib, "Ws2_32.lib")
 
 #define DEFAULT_BUFLEN 512
 #define EXPECTED_MSG_SIZE 31000 // 31kB
 
 // errors:
-#define CONNECTION_ERROR 1
-#define WSASTARTUP_ERROR 2
-#define GETADDRINFO_ERROR 3
-#define SEND_FAIL 4
-#define SHUTDOWN_ERROR 5
-#define RECV_ERROR 6
+// #define SOCKET_CREATION_ERROR 1
+// #define CONNECTION_ERROR 2
+// #define WSASTARTUP_ERROR 3
+// #define GETADDRINFO_ERROR 4
+// #define SEND_FAIL 5
+// #define SHUTDOWN_ERROR 6
+// #define RECV_ERROR 7
+
 
 /*
 To compile:
@@ -46,13 +50,6 @@ struct SSLConnection {
     SSL_CTX* ctx;
 };
 
-// /*
-// Connect To Server
-// This function will use provided host and port from user
-//     to return a socket connected to the destination host   
-//     using the port provided by the user.
-// Upon failure the function will return -1.
-// */
 
 void init_openssl(){
     SSL_library_init();           // loads encryption algs
@@ -64,64 +61,66 @@ void cleanup_openssl() {
     EVP_cleanup();
 }
 
-SOCKET connectToServer(const char* host, const char* port){
-    WSADATA wsaData; // init WSAData obj
 
-    int iResult; // init winsock and check for errors
+struct addrinfo hints, *infoptr;
 
-    // Initialize Winsock
-    iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
-    if (iResult != 0) {
-        fprintf(stderr, "WSAStartup failed: %d\n", iResult);
-        return ~0;
+
+int connectToServer(const char* host, const char* port){
+    /*
+    Connect To Server
+    WHAT: This function will use provided host and port from user
+        to return a socket connected to the destination host   
+        using the port provided by the user.
+    RETURN: Returns the socket number, or 0 upon failure
+*/    
+    int my_socket;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; // don't care if using IPv4 or IPv6
+    hints.ai_socktype = SOCK_STREAM; // stream-based connection (TCP)
+
+    int result = getaddrinfo(host, NULL, &hints, &infoptr); // struct list of potential IPs
+
+    // have we succeeded
+    if(result){
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(result));
+        exit(1);
     }
 
-    struct addrinfo hints, *result, *ptr;
+    struct addrinfo *p; // iterator
+    // char host_ip[256], port_ip[256]; // just to print, not needed
 
-    memset(&hints, 0, sizeof(struct addrinfo));
+    for (p = infoptr; p != NULL; p = p->ai_next){
+        // getnameinfo(p->ai_addr, p->ai_addrlen, host_ip, sizeof(host_ip), NULL, 0, NI_NUMERICHOST);
+        // puts(host_ip);   <-- was used for testing
 
-    hints.ai_family = AF_UNSPEC; // unspecified, so IPv4 and IPv6 are fine
-    hints.ai_socktype = SOCK_STREAM; //TCP
-    hints.ai_protocol = IPPROTO_TCP; // TCP Protocol
-
-    iResult = getaddrinfo(host, port, &hints, &result);
-    if(iResult != 0){
-        fprintf(stderr, "getaddrinfo failed: %d\n", iResult);
-        WSACleanup();
-        return ~0;
-    }
-
-    SOCKET serverSocket = INVALID_SOCKET;
-    
-    ptr = result;
-
-    for(; ptr != NULL; ptr = ptr->ai_next){ //trying as many addresses as possible
-        serverSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
-        if(serverSocket == INVALID_SOCKET){
+        my_socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol); //SOCK_NONBLOCK
+        if(my_socket == -1){
+            perror("socket error");
             continue;
         }
 
-        iResult = connect( serverSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
-        if(iResult != SOCKET_ERROR){
-            break; // found a valid address!
+        if(connect(my_socket, p->ai_addr, p->ai_addrlen) == -1){
+            perror("connect error");
+            close(my_socket);
+            continue;
         }
 
-        closesocket(serverSocket);
-        serverSocket = INVALID_SOCKET;
+        break; // reaching here means we connected successfully.
     }
 
-    freeaddrinfo(result);
+    freeaddrinfo(infoptr);
 
-    if(iResult == INVALID_SOCKET){
-        fprintf(stderr, "Unable to connect to server!\n");
-        WSACleanup();
-        return ~0;
+    if(p == NULL){
+        // we reached the end of the struct addrinfo list, no connections.
+        fprintf(stderr, "Couldnt find way to connect.\n");
+        exit(1);
     }
-    fprintf(stderr, "Server socket made.\n");
-    return serverSocket;
+
+    return my_socket;
 }
 
-struct SSLConnection ssl_context_wrap(SOCKET mySocket){
+struct SSLConnection ssl_context_wrap(int mySocket){
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
     SSL* ssl = SSL_new(ctx);
     SSL_set_fd(ssl, mySocket);
@@ -138,15 +137,15 @@ struct SSLConnection ssl_context_wrap(SOCKET mySocket){
     return myConn;
 }
 
-int sendDataToServer(void* ssl, SOCKET serverSocket, char* sendMe){
-    /*************************************************************
+int sendDataToServer(void* ssl, int serverSocket, char* sendMe){
+    /*
     Send Data To Server
 
     The following function will take in a serverSocket as input
-    and a message to send and will send the message to the server.
+        and a message to send and will send the message to the server.
     Upon success, the number of bytes sent will be returned.
     Upon failure, -1 will be returned.
-    *************************************************************/
+    */
     // Send request -------------------------------------------------------------------------------
     
     int sendAmount = 0;;
@@ -160,8 +159,7 @@ int sendDataToServer(void* ssl, SOCKET serverSocket, char* sendMe){
         fprintf(stderr, "Just sent: %d bytes", sendAmount);
         if (sendAmount == SOCKET_ERROR) {
             printf("send failed: %d\n", WSAGetLastError());
-            // closesocket(serverSocket);
-            WSACleanup();
+            close(serverSocket);
             return -1;
         }
 
@@ -171,8 +169,7 @@ int sendDataToServer(void* ssl, SOCKET serverSocket, char* sendMe){
     int shutdownResult = shutdown(serverSocket, SD_SEND);
     if(shutdownResult == SOCKET_ERROR){
         fprintf(stderr, "shutdown SEND failed: %d\n", WSAGetLastError());
-        // closesocket(serverSocket);
-        WSACleanup();
+        close(serverSocket);
         return -1;
     }
     fprintf(stderr, "Finished send. Total sent bytes: %d\n", totalSent);
@@ -209,7 +206,6 @@ char* recvDataFromServer(void* ssl){
             else{
                 fprintf(stderr, "Error: Not enough memory. Realloc failed.");
                 free(buffer);
-                WSACleanup();
                 return NULL;
             }
         }
@@ -267,34 +263,31 @@ void freeBuffer(char* buffer){
     free(buffer);
 }
 
-int cleanUp(struct SSLConnection myConn, SOCKET serverSocket){
+int cleanUp(struct SSLConnection myConn, int serverSocket){
     // DISCONNECT -------------------------------------------------------------
     int shutdownResult = shutdown(serverSocket, SD_RECEIVE);
     if(shutdownResult == SOCKET_ERROR){
         fprintf(stderr, "shutdown RECV failed: %d\n", WSAGetLastError());
-        closesocket(serverSocket);
-        WSACleanup();
+        close(serverSocket);
         return 1;
     }
 
     // CLEAN UP ----------------------------------------------------------------
-    closesocket(serverSocket); // Close the TCP socket
-    WSACleanup();
+    close(serverSocket); // Close the TCP socket
 
     SSL_shutdown(myConn.ssl);     // Gracefully close TLS session
     SSL_free(myConn.ssl);         // Free the SSL object
     SSL_CTX_free(myConn.ctx);     // Free the SSL context
     cleanup_openssl();     // Cleanup OpenSSL state
 
-
     return 0;
 }
 
-char* testData(){
-    // data = [
-    // {"id": 1, "name": "Alice", "score": 92},
-    // {"id": 2, "name": "Bob", "score": 85},
-    // ]
+// char* testData(){
+//     // data = [
+//     // {"id": 1, "name": "Alice", "score": 92},
+//     // {"id": 2, "name": "Bob", "score": 85},
+//     // ]
 
-    return NULL;
-}
+//     return NULL;
+// }

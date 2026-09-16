@@ -3,7 +3,7 @@ import asyncio
 import os
 import subprocess
 import json
-from memory_profiler import profile
+# from memory_profiler import profile
 from flask import Flask, jsonify
 
 DEFAULT_PORT = '443'
@@ -36,49 +36,58 @@ class SSLConnection(ctypes.Structure):
         ("ctx", ctypes.c_void_p)
     ]
 
-class APIError(Exception):
-    """Base class for API-related errors."""
-    pass
+# class APIError(Exception):
+#     """Base class for API-related errors."""
+#     pass
 
-class ConnectionError(APIError):
-    pass
+# class ConnectionError(APIError):
+#     print("Connection Error")
+#     # clean(connectionSocket)
+#     exit(1)
 
-class TimeoutError(APIError):
-    pass
+# class TimeoutError(APIError):
+#     print("Timeout Error")
+#     exit(1)
 
-class InvalidDataError(APIError):
-    pass
+# class InvalidDataError(APIError):
+#     print("Invalid Data Error")
+#     exit(1)
 
-class SendError(APIError):
-    pass
+# class SendError(APIError):
+#     print("Send Error")
+#     pass
 
-class RecvError(APIError):
-    pass
+# class RecvError(APIError):
+#     print("Recieve Error")
+#     pass
 
-class CleanupError():
-    pass
+# class CleanupError():
+#     print("Clean up Error")
+#     pass
 
-class GeneralError(APIError):
-    pass
+# class GeneralError(APIError):
+#     print("Unknown Error")
+#     pass
 
 
-def check_error(code):
-    if code == 0:
-        return
-    elif code == 1:
-        raise ConnectionError()
-    elif code == 2:
-        raise TimeoutError()
-    elif code == 3:
-        raise InvalidDataError()
-    elif code == 4:
-        raise SendError()
-    elif code == 5:
-        raise RecvError()    
-    elif code == 6:
-        raise CleanupError()
-    elif code == 2:
-        raise GeneralError()
+# def check_code(code):
+#     if code == 0:
+#         return
+#     elif code == 1:
+#         raise ConnectionError()
+#         return
+#     elif code == 2:
+#         raise TimeoutError()
+#     elif code == 3:
+#         raise InvalidDataError()
+#     elif code == 4:
+#         raise SendError()
+#     elif code == 5:
+#         raise RecvError()    
+#     elif code == 6:
+#         raise CleanupError()
+#     elif code == 2:
+#         raise GeneralError()
     
 
 def getAPIData(host, port, clib):
@@ -93,6 +102,7 @@ def getAPIData(host, port, clib):
     clean =        clib.cleanUp
     freeBuffer =   clib.freeBuffer
     # ------------------------------------------------------------
+
     # ----- Declare all argument and return types for FFIs -----
 
     initSSL.argtypes = None
@@ -116,14 +126,16 @@ def getAPIData(host, port, clib):
     
     freeBuffer.argtypes = [ctypes.c_char_p]
 
-    # -----------------------------------------------------------------
+    # -----------------------------------------------------------
+
     initSSL() # init all needed libraries for secure socket connection
-    # -----------------------------------------------------------------
 
     # Get socket to connect to API:
     connectionSocket = connectToAPI( host.encode('utf-8') , port.encode('utf-8') )
-    if(connectionSocket == ~0):
-        check_error(1)
+    if(connectionSocket == 0):
+        # check_code(1)
+        print("finished connect to api")
+        
     # -----------------------------------------------------------------
 
     # Wrap connected socket with TCP and a context wrap:
@@ -133,7 +145,7 @@ def getAPIData(host, port, clib):
     # Send data to server:
     amountSent = sendRequest(connection.ssl, connectionSocket, myMessage.encode('utf-8') )
     if(amountSent <= 0):
-        check_error(4)
+        # check_code(4)
         clean(connectionSocket)
 
     # -----------------------------------------------------------------
@@ -141,13 +153,12 @@ def getAPIData(host, port, clib):
     # Receive Data:
     dataString = recvData(connection.ssl)
     if(dataString == None):
-        check_error(5)
-        clean(connectionSocket)
+        check_code(5)
 
     # -----------------------------------------------------------------
     
     # Convert data from JSON to Python tables
-    # print("recv'd: ", dataString)
+    print("recv'd: ", dataString)
     try:
         convertedData = json.loads(dataString.decode('utf-8'))
     except Exception as e:
@@ -155,13 +166,15 @@ def getAPIData(host, port, clib):
         freeBuffer(dataString)
 
     # -----------------------------------------------------------------
+    
+
 
     # Clean up sockets and close connections.
     cleanStatus = clean(connection, connectionSocket)
     if(cleanStatus != 0):
         freeBuffer(dataString)
         # print("error in clean func", flush=True)
-        check_error(6)
+        check_code(6)
     
     # print("CONVERTED STRING IS:", convertedData['MRData']['StandingsTable']['StandingsLists'][0]["DriverStandings"])
     # freeBuffer(dataString)
@@ -195,7 +208,7 @@ def send_data():
 # @profile
 @app.route("/")
 def main():
-    lib = ctypes.CDLL('./myCLibrary.dll')
+    lib = ctypes.CDLL('src/Backend_Logic/myCLibrary_linux.so')
     print("Opened Library\n", flush=True)
 
     # Part 1: Get data from C function

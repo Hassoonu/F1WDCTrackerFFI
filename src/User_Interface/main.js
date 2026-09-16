@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain } = require('electron/main')
 const path = require('node:path')
 const { spawn } = require('child_process')
 
-const pythonProcess = spawn('python', ['main.py']);
+const pythonProcess = spawn('python', ['src/Backend_Logic/main.py']);
 
 pythonProcess.stdout.on('data', (data) => {
   console.log(`PYTHON: ${data}`);
@@ -15,7 +15,7 @@ pythonProcess.stderr.on('data', (data) => {
 pythonProcess.on('close', (code) => {
   console.log(`Python process exited with code ${code}`);
 });
-
+2
 const createWindow = () => {
     const myWindow = new BrowserWindow({
         width: 200,
@@ -24,7 +24,7 @@ const createWindow = () => {
         // titleBarStyle: 'hidden',
     })
 
-    myWindow.loadFile('index.html')
+    myWindow.loadFile('src/User_Interface/index.html')
 
     // win.webContents.openDevTools();
 }
