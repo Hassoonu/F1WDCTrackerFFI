@@ -3,3 +3,6 @@ myCLibrary.dll: myCLibrary.c
 
 run:
 	python main.py
+
+
+# gcc -fPIC -shared -o myCLibrary_linux.so myCLibrary_linux.c -lssl -lcrypto
