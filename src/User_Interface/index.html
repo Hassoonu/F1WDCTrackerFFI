@@ -9,13 +9,15 @@
     <link rel="stylesheet" href="styles.css">
     <title>F1 WDC Tracker</title>
     <body>
-        <span>
-            <ul id="drivers_list">Drivers
+        <div class="standings-container">
+            <ul id="drivers_list" class="info_list">
+              <!-- Dynamically populated by renderer.js -->
             </ul>
-
-            <ul id="points_list"> Points
+        
+            <ul id="points_list" class="info_list">
+              <!-- Dynamically populated by renderer.js -->
             </ul>
-<span>
+        </div>
     </body>
     <script src="./renderer.js"></script>
 </html>

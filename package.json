@@ -18,12 +18,12 @@
   "license": "MIT",
   "author": "Hasan Al Saeedi",
   "type": "commonjs",
-  "main": "main.js",
+  "main": "src/User_Interface/main.js",
   "scripts": {
     "start": "electron .",
     "test": "test"
   },
   "devDependencies": {
-    "electron": "^36.3.2"
+    "electron": "^43.2.0"
   }
 }

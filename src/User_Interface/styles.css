@@ -1,0 +1,56 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  /* Official F1 dark background */
+  background-color: #15151e;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  padding: 16px;
+  user-select: none;
+}
+
+/* Align columns left-to-right with a tight 16px gap between them */
+.standings-container {
+  display: flex;
+  justify-content: flex-start;
+  gap: 16px; 
+}
+
+.info_list {
+  display: flex;
+  flex-direction: column;
+  list-style-type: none;
+  gap: 6px; /* Small spacing between rows */
+}
+
+/* Driver names styling */
+#drivers_list {
+  text-align: left;
+}
+
+/* Points styling */
+#points_list {
+  text-align: right;
+}
+
+/* Apply identical formatting to ALL list items (including 1st place) */
+.info_list li {
+  font-weight: 700;
+  font-size: 1.10rem; /* text size */
+  color: #ffffff;
+  line-height: 1.3;
+}
+
+/* Target the header/title row specifically if it is the first <li> element */
+.info_list li.list-header {
+  color: #e10600; /* F1 Red accent for headers */
+  text-transform: uppercase;
+  font-weight: 800;
+  font-size: 1.35rem;
+  letter-spacing: 1px;
+  padding-bottom: 4px;
+}

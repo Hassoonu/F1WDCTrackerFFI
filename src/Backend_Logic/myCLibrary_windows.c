@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h> // file control operations
-#include <winsock2.h> // for windows, not linux
+#include <sys/socket.h> // for windows, not linux
 #include <ws2tcpip.h>
 
 #include <openssl/ssl.h>
@@ -20,12 +20,13 @@
 #define EXPECTED_MSG_SIZE 31000 // 31kB
 
 // errors:
-#define CONNECTION_ERROR 1
-#define WSASTARTUP_ERROR 2
-#define GETADDRINFO_ERROR 3
-#define SEND_FAIL 4
-#define SHUTDOWN_ERROR 5
-#define RECV_ERROR 6
+#define SOCKET_CREATION_ERROR 1
+#define CONNECTION_ERROR 2
+#define WSASTARTUP_ERROR 3
+#define GETADDRINFO_ERROR 4
+#define SEND_FAIL 5
+#define SHUTDOWN_ERROR 6
+#define RECV_ERROR 7
 
 /*
 To compile:
@@ -65,6 +66,16 @@ void cleanup_openssl() {
 }
 
 SOCKET connectToServer(const char* host, const char* port){
+    
+    int socket_desc;
+
+    socket_desc = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (socket_desc == -1){
+        // need better error handling
+        return SOCKET_CREATION_ERROR;
+    }
+    
     WSADATA wsaData; // init WSAData obj
 
     int iResult; // init winsock and check for errors
