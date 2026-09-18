@@ -1,15 +1,15 @@
-const { app, BrowserWindow, ipcMain } = require('electron/main')
+const { app, BrowserWindow, Menu, screen } = require('electron/main')
 const path = require('node:path')
 const { spawn } = require('child_process')
 
-const pythonProcess = spawn('python', ['src/Backend_Logic/main.py']);
+const pythonProcess = spawn('python', ['src/Backend_Logic/main.py', '--log-level=INFO']);
 
 pythonProcess.stdout.on('data', (data) => {
-  console.log(`PYTHON: ${data}`);
+  console.log(`PYTHON STDOUT STREAM: ${data}`);
 });
 
 pythonProcess.stderr.on('data', (data) => {
-  console.error(`PYTHON ERROR: ${data}`);
+  console.error(`PYTHON ERROR STREAM: ${data}`);
 });
 
 pythonProcess.on('close', (code) => {
@@ -17,17 +17,36 @@ pythonProcess.on('close', (code) => {
 });
 2
 const createWindow = () => {
+    Menu.setApplicationMenu(null)
+
+    const windowWidth = 270;
+    const windowHeight = 400;
+
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { x: workX, y: workY, width: workWidth, height: workHeight } = primaryDisplay.workArea;
+
+    const x = workX + workWidth - windowWidth - 10;
+    const y = workY + workHeight - windowHeight - 10;
+
     const myWindow = new BrowserWindow({
-        width: 200,
-        height: 500,
+        width: windowWidth,
+        height: windowHeight,
+        x: x,
+        y: y,
         resizable: true,
-        // titleBarStyle: 'hidden',
-    })
+        webPreferences: {
+          nodeIntegration: true,
+          contextIsolation: false,
+        }
+    });
 
     myWindow.loadFile('src/User_Interface/index.html')
 
     // win.webContents.openDevTools();
 }
+
+
+// app.commandLine.appendSwitch('disable-features', 'WaylandFractionalScaleV1,WaylandColorManagement');
 
 app.whenReady().then(() => {
     createWindow()

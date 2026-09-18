@@ -1,10 +1,11 @@
 import ctypes # allows me to import a c file 
-import asyncio
-import os
-import subprocess
 import json
+import argparse
+from datetime import datetime
 # from memory_profiler import profile
 from flask import Flask, jsonify
+
+import logging # python logger, better than just using print statements
 
 DEFAULT_PORT = '443'
 host = 'api.jolpi.ca'
@@ -14,21 +15,62 @@ EXPECTED_MSG_SIZE = 31000 # 31kB
 # sharedMemName = "SharedMemory"
 myMessage = "GET /ergast/f1/current/driverstandings/?format=json HTTP/1.1\r\n" \
             "Host: api.jolpi.ca\r\n" \
-            "User-Agent: my-openssl-client/1.0\r\n" \
+            "User-Agent: F1WdcTracker/0.1\r\n" \
             "Connection: close\r\n" \
             "\r\n"
+
+LOG_PATH = "/home/hasan/Desktop/Code/f1wdcTrack/src/logs"
 
 app = Flask(__name__)
 
 data = []
-#test server command: nc -l -p 1234 -e /bin/cat -k
 
-# class Result(ctypes.Structure):
-#     _fields_ = [
-#         ("succeed"),
-#         ("errorCode"),
-#         ("")
-#     ]
+logger = logging.getLogger(__name__)
+
+
+def logger_config(logging_level):
+    logging_level = logging_level.upper()
+
+    # print(logging_level)
+
+    conf_level = logging.WARNING
+    
+    match logging_level:
+        case "DEBUG":
+            conf_level = logging.DEBUG
+        
+        case "INFO":
+            conf_level = logging.INFO
+
+        case "WARNING":
+            conf_level = logging.WARNING
+
+        case "ERROR":
+            conf_level = logging.ERROR
+
+        case "CRITICAL":
+            conf_level = logging.CRITICAL
+
+        case _:
+            print("Invalid logging argument. If you wish to modify the logging, add one of the following at the end of the program:\n--DEBUG\n--INFO\n--WARNING\n--ERROR\n--CRITICAL")
+            exit(1)
+
+    now = datetime.now()
+
+    date_time = now.strftime("%m-%d-%Y_%H:%M:%S")
+
+    full_filename = f"f1_wdc_tracker-{date_time}"
+
+    logging.basicConfig(
+        filename=f'{LOG_PATH}/{full_filename}.log', 
+        encoding='utf-8', 
+        level=conf_level,
+        format="%(asctime)s - %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    logger.info("Finished logger setup.")
+
 
 class SSLConnection(ctypes.Structure):
     _fields_ = [
@@ -94,14 +136,16 @@ def getAPIData(host, port, clib):
     global data
     # ----- Declare all foreign functions (FFIs) that will be used -----
 
-    initSSL =      clib.init_openssl
-    connectToAPI = clib.connectToServer
-    contextWrap =  clib.ssl_context_wrap
-    sendRequest =  clib.sendDataToServer
-    recvData =     clib.recvDataFromServer
-    clean =        clib.cleanUp
-    freeBuffer =   clib.freeBuffer
-    # ------------------------------------------------------------
+    initSSL =       clib.init_openssl
+    connectToAPI =  clib.connectToServer
+    contextWrap =   clib.ssl_context_wrap
+    sendRequest =   clib.sendDataToServer
+    recvData =      clib.recvDataFromServer
+    clean =         clib.cleanUp
+    freeBuffer =    clib.freeBuffer
+    remove_header = clib.remove_header
+
+    logger.info("Finished loading clib libraries to python variables.")
 
     # ----- Declare all argument and return types for FFIs -----
 
@@ -118,52 +162,72 @@ def getAPIData(host, port, clib):
     sendRequest.restype = ctypes.c_int
 
     recvData.argtypes = [ctypes.c_void_p]
-    recvData.restype = ctypes.c_char_p
+    recvData.restype = ctypes.c_void_p
 
     clean.argtypes = [SSLConnection, ctypes.c_size_t]
     clean.restype = ctypes.c_int
 
-    
-    freeBuffer.argtypes = [ctypes.c_char_p]
+    freeBuffer.argtypes = [ctypes.c_void_p]
+
+    remove_header.argtypes = [ctypes.c_void_p]
+    remove_header.restype = ctypes.c_void_p
+
+    logger.info("Finished declaring arg and return types for all clib functions.")
 
     # -----------------------------------------------------------
 
     initSSL() # init all needed libraries for secure socket connection
 
+    logger.info("Initialized SSL libraries and constants.")
+
     # Get socket to connect to API:
     connectionSocket = connectToAPI( host.encode('utf-8') , port.encode('utf-8') )
     if(connectionSocket == 0):
-        # check_code(1)
-        print("finished connect to api")
+        logger.error("Could not connect TCP socket to server.")
+        return None
+    
+    logger.info("Connected basic TCP socket to server")
         
-    # -----------------------------------------------------------------
-
     # Wrap connected socket with TCP and a context wrap:
-    connection = contextWrap(connectionSocket)
-    # -----------------------------------------------------------------
+    connection = contextWrap(connectionSocket, host.encode('utf-8'))
+    logger.info("Wrapped the ssl connection and ctx together in one structure.")
 
     # Send data to server:
     amountSent = sendRequest(connection.ssl, connectionSocket, myMessage.encode('utf-8') )
     if(amountSent <= 0):
         # check_code(4)
-        clean(connectionSocket)
+        logger.error("Could not send message, aborting.")
+        clean(connection, connectionSocket)
+        return None
 
-    # -----------------------------------------------------------------
+    logger.info("Sent request to server.")
 
     # Receive Data:
-    dataString = recvData(connection.ssl)
-    if(dataString == None):
-        check_code(5)
-
-    # -----------------------------------------------------------------
-    
-    # Convert data from JSON to Python tables
-    print("recv'd: ", dataString)
-    try:
-        convertedData = json.loads(dataString.decode('utf-8'))
-    except Exception as e:
+    reply_string = recvData(connection.ssl)
+    if(reply_string == None):
+        # check_code(5)
         clean(connection, connectionSocket)
-        freeBuffer(dataString)
+        # freeBuffer(reply_string)
+
+    logger.info("Received data.")
+
+    # Convert data from JSON to Python tables
+    # print("recv'd: ", reply_string_py_storage.decode('utf-8'))
+    # print("\n\n")
+    try:
+        parsed_data = remove_header(reply_string)
+        if(parsed_data):
+            parsed_data_py_storage = ctypes.string_at(parsed_data)
+            freeBuffer(parsed_data)
+            parsed_text = parsed_data_py_storage.decode('utf-8')
+        # print("\n\nparsed_text: ", parsed_text)
+        convertedData = json.loads(parsed_text)
+        # print("\n\n\nconvertedData: ", convertedData)
+        logger.info("Converted data from string to JSON.")
+    except Exception as e:
+        logger.error("Could not convert data to JSON.")
+        clean(connection, connectionSocket)
+        # freeBuffer(dataString)
 
     # -----------------------------------------------------------------
     
@@ -172,52 +236,61 @@ def getAPIData(host, port, clib):
     # Clean up sockets and close connections.
     cleanStatus = clean(connection, connectionSocket)
     if(cleanStatus != 0):
-        freeBuffer(dataString)
-        # print("error in clean func", flush=True)
-        check_code(6)
+
+        # check_code(6)
+        clean(connection, connectionSocket)
     
     # print("CONVERTED STRING IS:", convertedData['MRData']['StandingsTable']['StandingsLists'][0]["DriverStandings"])
-    # freeBuffer(dataString)
     data = convertedData
+
 
 def parse_data(data):
     standings_list = data['MRData']['StandingsTable']['StandingsLists'][0]["DriverStandings"]
+
     driverId = []
     points = []
-    # print(standings_list, flush=True)
+
     for i in range(len(standings_list)):
         points.append(standings_list[i]['points'])
-        driverId.append(standings_list[i]['Driver']['driverId'])
-    # print("---------------------------------------------------------", flush=True)
-    # print(driverId)
-    # print(points)
-    # print(data['MRData']['StandingsTable'])
+        driverId.append(standings_list[i]['Driver']['givenName'] + " " + standings_list[i]['Driver']['familyName'])
+    
     return driverId, points
 
 @app.route("/data")
 def send_data():
     drivers, points = parse_data(data)
-    print("Parsed the data\n", flush=True)
+    logger.info("Parsed the data\n")
 
     driverData = {
         "drivers": drivers,
         "points": points
     }
+    logger.info("Combined data to one JSON structure.\n")
+
     return jsonify(driverData)
 
 # @profile
 @app.route("/")
 def main():
+    parser = argparse.ArgumentParser(description="F1 WDC Tracker")
+    parser.add_argument("--log-level", type=str, default="WARNING",
+                     choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                     help="Set the logging level")
+
+    args = parser.parse_args()
+    logger_config(args.log_level)
+        
+
     lib = ctypes.CDLL('src/Backend_Logic/myCLibrary_linux.so')
-    print("Opened Library\n", flush=True)
+    logger.info("Opened Library\n")
 
-    # Part 1: Get data from C function
-    getAPIData(host, DEFAULT_PORT, lib)
-    print("WE GOT THE DATA!!!\n\n\n\n", flush=True)
+    ret = getAPIData(host, DEFAULT_PORT, lib)
+    if(ret == None):
+        # something went wrong :(
+        logger.critical("Something went wrong in getAPIData, cannot solve, failing.")
+        return
+    logger.info("Received data")
     # print("DATA IS:", data)
-
-    
-    print("Created deliverable\n", flush=True)
 
     app.run(port=5000)
 
